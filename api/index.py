@@ -21,6 +21,7 @@ def ensure_dirs():
     for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER]:
         os.makedirs(folder, exist_ok=True)
     
+    # Salin file error_codes ke /tmp jika belum ada agar bisa di-CRUD
     if not os.path.exists(CONFIG_FILE):
         original_path = os.path.join(base_dir, 'error_codes.txt')
         if os.path.exists(original_path):
@@ -44,24 +45,23 @@ def save_error_mapping(mapping):
         for code, desc in mapping.items():
             f.write(f"{code}={desc}\n")
 
-# 3. LOGIKA PEMROSESAN DATA
+# 3. LOGIKA PEMROSESAN DINAMIS
 def process_emoney_data(data_type='raw'):
     ensure_dirs()
     error_map = get_error_mapping()
+    # Ambil daftar kode error terdaftar untuk pemotongan hex dinamis
     registered_codes = sorted(list(error_map.keys()), key=len, reverse=True)
     
+    df = pd.DataFrame(columns=['mid', 'tid', 'kode_bank', 'no_kartu', 'saldo', 'tarif', 'counter', 'trx_date', 'waktu_unik', 'respon', 'error_code'])
     file_list = [f for f in os.listdir(UPLOAD_FOLDER) if f.endswith(('.txt', '.NOK'))]
+
     if not file_list: return False
 
     for nama_file in file_list:
-        df = pd.DataFrame(columns=['mid', 'tid', 'kode_bank', 'no_kartu', 'saldo', 'tarif', 'counter', 'trx_date', 'waktu_unik', 'respon', 'error_code'])
-        file_details = {code: 0 for code in error_map.keys()}
-        
         file_path = os.path.join(UPLOAD_FOLDER, nama_file)
         try:
             with open(file_path, 'r', encoding='utf-8') as file:
                 lines = file.readlines()
-            
             for line in lines:
                 line = line.strip()
                 if not line: continue
@@ -72,13 +72,7 @@ def process_emoney_data(data_type='raw'):
                     hexdata = parts[0]
                     error_code = parts[-1] if len(parts) > 1 else ""
                     
-                    if error_code in file_details:
-                        file_details[error_code] += 1
-                    
-                    # SKIP KODE 02
-                    if error_code == "02": continue
-                    
-                    # POTONG HEX DINAMIS
+                    # DINAMIS: Potong hex jika berakhiran kode yang ada di error_codes.txt
                     for code in registered_codes:
                         if hexdata.endswith(code):
                             hexdata = hexdata[:-len(code)]
@@ -99,22 +93,22 @@ def process_emoney_data(data_type='raw'):
                     }
                     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 except: continue
-
-            if not df.empty:
-                wkt = datetime.now().strftime("%Y%m%d%H%M%S")
-                detail_str = "|".join([f"{c}:{v}" for c, v in file_details.items() if v > 0])
-                
-                for tid in df['tid'].unique():
-                    subset = df[df['tid'] == tid].head(999)
-                    mid = subset.iloc[0]['mid']
-                    nama_out = f"{wkt}_{nama_file}_{tid}.txt"
-                    
-                    with open(os.path.join(OUTPUT_FOLDER, nama_out), "w") as f:
-                        type_label = "RAW" if data_type == 'raw' else "NOK"
-                        f.write(f"{len(subset):03d}{subset['tarif'].sum():010d}{type_label}{detail_str}\n")
-                        for _, row in subset.iterrows():
-                            f.write(row['respon'][14:] + "\n")
         except: continue
+
+    if df.empty: return False
+
+    wkt = datetime.now().strftime("%Y%m%d%H%M%S")
+    for tid in df['tid'].unique():
+        subset = df[df['tid'] == tid].head(999)
+        mid = subset.iloc[0]['mid']
+        err = subset.iloc[0]['error_code'][:2] if data_type == 'nok' else ""
+        nama_out = f"{wkt}{mid}{tid}01001.txt"
+        
+        with open(os.path.join(OUTPUT_FOLDER, nama_out), "w") as f:
+            type_label = "RAW" if data_type == 'raw' else "NOK"
+            f.write(f"{len(subset):03d}{subset['tarif'].sum():010d}{type_label}{err}\n")
+            for _, row in subset.iterrows():
+                f.write(row['respon'][14:] + "\n")
     return True
 
 # 4. ROUTES
@@ -129,19 +123,14 @@ def index():
             try:
                 with open(os.path.join(OUTPUT_FOLDER, filename), 'r') as f:
                     header = f.readline().strip()
-                    raw_details = header[16:].split('|') if len(header) > 16 else []
-                    formatted_details = []
-                    for d in raw_details:
-                        if ':' in d:
-                            c, v = d.split(':')
-                            formatted_details.append(f"{v} {error_map.get(c, 'Error')}")
-                    
+                    err_code = header[16:18] if len(header) > 16 else ""
                     files_data.append({
                         'name': filename,
                         'count': int(header[:3]),
                         'amount': int(header[3:13]),
                         'type': header[13:16],
-                        'details': ", ".join(formatted_details)
+                        'error': err_code,
+                        'error_msg': error_map.get(err_code, "Unknown Error") if err_code else ""
                     })
             except: continue
     return render_template('index.html', files=files_data)
@@ -152,7 +141,7 @@ def upload_file():
     if request.form.get('password') != 'Duta@321':
         flash('Password Auth Salah!', 'danger')
         return redirect(url_for('index'))
-    
+        
     data_type = request.form.get('data_type', 'raw')
     files = request.files.getlist('files')
     for file in files:
@@ -175,13 +164,14 @@ def config_errors():
             if code and desc:
                 error_map[code] = desc
                 save_error_mapping(error_map)
-                flash(f'Kode {code} Berhasil Diperbarui', 'success')
+                flash(f'Kode {code} Disimpan', 'success')
         elif 'delete_code' in request.form:
             code = request.form.get('delete_code')
             if code in error_map:
                 del error_map[code]
                 save_error_mapping(error_map)
                 flash(f'Kode {code} Dihapus', 'danger')
+    
     return render_template('config.html', error_map=error_map, auth_pass=auth)
 
 @app.route('/download/<filename>')
@@ -193,5 +183,4 @@ def clear_all():
     ensure_dirs()
     for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER]:
         for f in os.listdir(folder): os.remove(os.path.join(folder, f))
-    flash('Storage Bersih!', 'success')
     return redirect(url_for('index'))
