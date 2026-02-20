@@ -1,0 +1,4 @@
+03=Count Mismatch
+02=Duplicate Data
+01=Invalid Card
+05=System Timeout
