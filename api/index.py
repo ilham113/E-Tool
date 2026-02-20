@@ -30,14 +30,15 @@ log_filename = os.path.join(LOG_FOLDER, "log_kartu.log")
 # Pastikan folder log ada sebelum handler dibuat
 os.makedirs(LOG_FOLDER, exist_ok=True)
 
-handler = TimedRotatingFileHandler(log_filename, when="midnight", interval=1, backupCount=30)
-handler.suffix = "%Y-%m-%d"
+# Ganti nama variabel 'handler' menjadi 'log_handler' atau lainnya
+log_handler = TimedRotatingFileHandler(log_filename, when="midnight", interval=1, backupCount=30)
+log_handler.suffix = "%Y-%m-%d"
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
+log_handler.setFormatter(formatter)
 
 logger = logging.getLogger("KartuLogger")
 logger.setLevel(logging.INFO)
-logger.addHandler(handler)
+logger.addHandler(log_handler) # Pastikan ini juga diubah
 
 # ---------------------------------------------------------
 # LOGIKA PEMROSESAN DATA
