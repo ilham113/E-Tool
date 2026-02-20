@@ -13,11 +13,10 @@
     <div class="row justify-content-center">
         <div class="col-md-10">
             <div class="card shadow border-0 mb-4">
-                <div class="card-header bg-primary text-white p-3">
+                <div class="card-header bg-primary text-white p-3 text-center">
                     <h4 class="mb-0"><i class="fas fa-file-invoice-dollar"></i> Tool Settlement E-Money</h4>
                 </div>
                 <div class="card-body p-4">
-                    
                     {% with messages = get_flashed_messages(with_categories=true) %}
                         {% if messages %}
                             {% for category, message in messages %}
@@ -30,19 +29,27 @@
                     {% endwith %}
 
                     <form action="/upload" method="post" enctype="multipart/form-data">
-                        <label class="form-label fw-bold">Pilih File Log Mentah (.txt):</label>
-                        <div class="input-group mb-3">
-                            <input type="file" name="files" class="form-control" multiple required>
-                            <button class="btn btn-primary" type="submit">Proses Sekarang</button>
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <label class="form-label fw-bold">Jenis Data:</label>
+                                <select name="data_type" class="form-select">
+                                    <option value="raw">Raw Data (.txt)</option>
+                                    <option value="nok">Data Error (.NOK)</option>
+                                </select>
+                            </div>
+                            <div class="col-md-8">
+                                <label class="form-label fw-bold">Pilih File Mentah:</label>
+                                <input type="file" name="files" class="form-control" multiple required>
+                            </div>
                         </div>
-                        <small class="text-muted italic">*Anda bisa memilih banyak file sekaligus.</small>
+                        <button class="btn btn-primary w-100 py-2 fw-bold" type="submit">PROSES DATA</button>
                     </form>
                 </div>
             </div>
 
             <div class="d-flex justify-content-between align-items-center mb-3">
-                <h5><i class="fas fa-list"></i> Daftar File Siap Kirim</h5>
-                <form action="/clear-all" method="post" onsubmit="return confirm('Hapus SEMUA data input dan output?')">
+                <h5><i class="fas fa-list"></i> Daftar File Settlement</h5>
+                <form action="/clear-all" method="post" onsubmit="return confirm('Hapus SEMUA data?')">
                     <button type="submit" class="btn btn-danger btn-sm">
                         <i class="fas fa-trash-alt"></i> Bersihkan Storage
                     </button>
@@ -52,28 +59,31 @@
             <div class="card shadow border-0">
                 <div class="table-responsive">
                     <table class="table table-hover mb-0">
-                        <thead class="table-dark">
+                        <thead class="table-dark text-center">
                             <tr>
-                                <th>Nama File Settlement</th>
-                                <th class="text-center">Aksi</th>
+                                <th>Nama File</th>
+                                <th>Trx</th>
+                                <th>Total Uang</th>
+                                <th>Aksi</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for file in files %}
                             <tr>
-                                <td class="align-middle fw-bold text-secondary">{{ file }}</td>
-                                <td class="text-center">
-                                    <a href="/download/{{ file }}" class="btn btn-success btn-sm">
-                                        <i class="fas fa-download"></i> Download
-                                    </a>
-                                    <a href="/delete/{{ file }}" class="btn btn-outline-danger btn-sm" onclick="return confirm('Hapus file ini?')">
-                                        <i class="fas fa-trash"></i>
+                                <td class="align-middle fw-bold text-secondary ps-3">{{ file.name }}</td>
+                                <td class="text-center align-middle">{{ file.count }}</td>
+                                <td class="text-center align-middle text-primary fw-bold">
+                                    Rp {{ "{:,.0f}".format(file.amount).replace(',', '.') }}
+                                </td>
+                                <td class="text-center align-middle">
+                                    <a href="/download/{{ file.name }}" class="btn btn-success btn-sm">
+                                        <i class="fas fa-download"></i>
                                     </a>
                                 </td>
                             </tr>
                             {% else %}
                             <tr>
-                                <td colspan="2" class="text-center py-4 text-muted">Belum ada file settlement yang digenerate.</td>
+                                <td colspan="4" class="text-center py-4 text-muted italic">Belum ada file settlement yang diproses.</td>
                             </tr>
                             {% endfor %}
                         </tbody>
