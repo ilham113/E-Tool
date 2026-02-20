@@ -10,9 +10,9 @@ app = Flask(__name__)
 app.secret_key = 'duta1234' # Untuk flash message
 
 # Konfigurasi Folder
-UPLOAD_FOLDER = 'data'
-OUTPUT_FOLDER = 'kirim'
-LOG_FOLDER = 'logs'
+UPLOAD_FOLDER = '/tmp/data'
+OUTPUT_FOLDER = '/tmp/kirim'
+LOG_FOLDER = '/tmp/logs'
 
 for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER, LOG_FOLDER]:
     os.makedirs(folder, exist_ok=True)
