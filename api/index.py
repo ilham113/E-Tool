@@ -50,14 +50,18 @@ def process_emoney_data(data_type='raw'):
     error_map = get_error_mapping()
     registered_codes = sorted(list(error_map.keys()), key=len, reverse=True)
     
+    # Inisialisasi DataFrame untuk menampung data yang valid
+    df = pd.DataFrame(columns=['mid', 'tid', 'kode_bank', 'no_kartu', 'saldo', 'tarif', 'counter', 'trx_date', 'waktu_unik', 'respon', 'error_code'])
     file_list = [f for f in os.listdir(UPLOAD_FOLDER) if f.endswith(('.txt', '.NOK'))]
+
     if not file_list: return False
 
+    any_valid_data = False # Flag untuk mengecek apakah ada data selain 02
+
     for nama_file in file_list:
-        df = pd.DataFrame(columns=['mid', 'tid', 'kode_bank', 'no_kartu', 'saldo', 'tarif', 'counter', 'trx_date', 'waktu_unik', 'respon', 'error_code'])
         file_details = {code: 0 for code in error_map.keys()}
-        
         file_path = os.path.join(UPLOAD_FOLDER, nama_file)
+        
         try:
             with open(file_path, 'r', encoding='utf-8') as file:
                 lines = file.readlines()
@@ -75,10 +79,10 @@ def process_emoney_data(data_type='raw'):
                     if error_code in file_details:
                         file_details[error_code] += 1
                     
-                    # SKIP KODE 02
-                    if error_code == "02": continue
+                    # Logika Utama: Jika kode 02, lewati dan jangan masukkan ke proses selanjutnya
+                    if error_code == "02": 
+                        continue 
                     
-                    # POTONG HEX DINAMIS
                     for code in registered_codes:
                         if hexdata.endswith(code):
                             hexdata = hexdata[:-len(code)]
@@ -98,8 +102,10 @@ def process_emoney_data(data_type='raw'):
                         'waktu_unik': full_hex[40:54], 'respon': full_hex, 'error_code': error_code
                     }
                     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                    any_valid_data = True # Tandai bahwa ada data valid yang bisa dibuatkan file
                 except: continue
 
+            # Pembuatan file hanya terjadi jika DataFrame tidak kosong
             if not df.empty:
                 wkt = datetime.now().strftime("%Y%m%d%H%M%S")
                 detail_str = "|".join([f"{c}:{v}" for c, v in file_details.items() if v > 0])
@@ -108,14 +114,21 @@ def process_emoney_data(data_type='raw'):
                     subset = df[df['tid'] == tid].head(999)
                     mid = subset.iloc[0]['mid']
                     nama_out = f"{wkt}_{nama_file}_{tid}.txt"
+                    filepath = os.path.join(OUTPUT_FOLDER, nama_out)
                     
-                    with open(os.path.join(OUTPUT_FOLDER, nama_out), "w") as f:
+                    with open(filepath, "w") as f:
                         type_label = "RAW" if data_type == 'raw' else "NOK"
+                        # Tulis header dengan detail error untuk tampilan index
                         f.write(f"{len(subset):03d}{subset['tarif'].sum():010d}{type_label}{detail_str}\n")
                         for _, row in subset.iterrows():
                             f.write(row['respon'][14:] + "\n")
-        except: continue
-    return True
+                            
+        except Exception as e:
+            print(f"Error processing {nama_file}: {e}")
+            continue
+            
+    # Kembalikan True jika ada file yang berhasil dibuat, False jika semua 02
+    return any_valid_data
 
 # 4. ROUTES
 @app.route('/')
