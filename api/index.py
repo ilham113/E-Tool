@@ -6,7 +6,13 @@ from datetime import datetime
 import logging
 from logging.handlers import TimedRotatingFileHandler
 
-app = Flask(__name__)
+# Cari path folder saat ini (folder /api)
+base_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Tentukan lokasi folder templates yang berada di root (sejajar dengan folder api)
+template_dir = os.path.join(base_dir, '..', 'templates')
+
+app = Flask(__name__, template_folder=template_dir)
 app.secret_key = 'duta1234' # Untuk flash message
 
 # Konfigurasi Folder
