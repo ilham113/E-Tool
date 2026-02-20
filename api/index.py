@@ -1,35 +1,35 @@
 import os
 import pandas as pd
-import shutil
 from flask import Flask, render_template, request, redirect, url_for, send_from_directory, flash
 from datetime import datetime
 import logging
 from logging.handlers import TimedRotatingFileHandler
 
-# Cari path folder saat ini (folder /api)
+# 1. SETUP PATH TEMPLATES
 base_dir = os.path.dirname(os.path.abspath(__file__))
-
-# Tentukan lokasi folder templates yang berada di root (sejajar dengan folder api)
 template_dir = os.path.join(base_dir, '..', 'templates')
 
 app = Flask(__name__, template_folder=template_dir)
-app.secret_key = 'duta1234' # Untuk flash message
+app.secret_key = 'duta1234'
 
-# Konfigurasi Folder
+# 2. KONFIGURASI FOLDER (Menggunakan /tmp untuk Vercel)
 UPLOAD_FOLDER = '/tmp/data'
 OUTPUT_FOLDER = '/tmp/kirim'
 LOG_FOLDER = '/tmp/logs'
 
-for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER, LOG_FOLDER]:
-    os.makedirs(folder, exist_ok=True)
+# Fungsi untuk memastikan folder ada (dipanggil saat dibutuhkan)
+def ensure_dirs():
+    for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER, LOG_FOLDER]:
+        os.makedirs(folder, exist_ok=True)
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
-# ---------------------------------------------------------
-# KONFIGURASI LOGGING (DAILY)
-# ---------------------------------------------------------
+# 3. KONFIGURASI LOGGING
 log_filename = os.path.join(LOG_FOLDER, "log_kartu.log")
+# Pastikan folder log ada sebelum handler dibuat
+os.makedirs(LOG_FOLDER, exist_ok=True)
+
 handler = TimedRotatingFileHandler(log_filename, when="midnight", interval=1, backupCount=30)
 handler.suffix = "%Y-%m-%d"
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
@@ -43,7 +43,12 @@ logger.addHandler(handler)
 # LOGIKA PEMROSESAN DATA
 # ---------------------------------------------------------
 def process_emoney_data():
+    ensure_dirs()
     df = pd.DataFrame(columns=['mid', 'tid', 'kode_bank', 'no_kartu', 'saldo', 'tarif', 'counter', 'trx_date', 'waktu_unik', 'respon'])
+    
+    if not os.path.exists(app.config['UPLOAD_FOLDER']):
+        return False
+        
     file_list = [f for f in os.listdir(app.config['UPLOAD_FOLDER']) if f.endswith('.txt')]
 
     if not file_list:
@@ -61,7 +66,6 @@ def process_emoney_data():
                     logger.warning(f"Data terlalu pendek di {nama_file} baris {idx+1}")
                     continue
                 
-                # Header dummy sesuai notebook
                 prefix = '0200a900000000'
                 full_hex = prefix + hexdata
                 
@@ -86,30 +90,25 @@ def process_emoney_data():
 
     if df.empty: return False
 
-    # Logika Settlement (Pemisahan per TID/MID)
     wkt = datetime.now().strftime("%Y%m%d%H%M%S")
     tids = df['tid'].unique()
 
     for tid in tids:
         subset = df[df['tid'] == tid]
         mid = subset.iloc[0]['mid']
-        
-        # Limit 999 baris per batch sesuai notebook
         data_batch = subset.head(999)
         trxcount = len(data_batch)
         trxamount = data_batch['tarif'].sum()
         
-        bat = "001"
-        nama_file_out = f"{wkt}{mid}{tid}01{bat}.txt"
+        nama_file_out = f"{wkt}{mid}{tid}01001.txt"
         filepath = os.path.join(app.config['OUTPUT_FOLDER'], nama_file_out)
 
         with open(filepath, "w") as f:
             f.write(f"{trxcount:03d}{trxamount:010d}\n")
             for _, row in data_batch.iterrows():
-                # Tulis data tanpa prefix 14 karakter pertama (kembali ke format asli)
                 f.write(row['respon'][14:] + "\n")
         
-        logger.info(f"SUCCESS | File Created: {nama_file_out} | Trx: {trxcount} | Amount: {trxamount}")
+        logger.info(f"SUCCESS | File Created: {nama_file_out} | Trx: {trxcount}")
 
     return True
 
@@ -118,14 +117,16 @@ def process_emoney_data():
 # ---------------------------------------------------------
 @app.route('/')
 def index():
+    ensure_dirs()
     files = sorted([f for f in os.listdir(app.config['OUTPUT_FOLDER']) if f.endswith('.txt')], reverse=True)
     return render_template('index.html', files=files)
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
+    ensure_dirs()
     if 'files' not in request.files:
         flash('Tidak ada file terpilih', 'danger')
-        return redirect(request.url)
+        return redirect(url_for('index'))
     
     files = request.files.getlist('files')
     uploaded_count = 0
@@ -138,7 +139,7 @@ def upload_file():
         if process_emoney_data():
             flash(f'Berhasil memproses {uploaded_count} file.', 'success')
         else:
-            flash('File berhasil diunggah tapi gagal diproses (Format tidak sesuai).', 'warning')
+            flash('Gagal memproses file.', 'warning')
     
     return redirect(url_for('index'))
 
@@ -146,27 +147,16 @@ def upload_file():
 def download_file(filename):
     return send_from_directory(app.config['OUTPUT_FOLDER'], filename)
 
-@app.route('/delete/<filename>')
-def delete_file(filename):
-    try:
-        os.remove(os.path.join(app.config['OUTPUT_FOLDER'], filename))
-        flash(f'File {filename} dihapus.', 'info')
-    except:
-        flash('Gagal menghapus file.', 'danger')
-    return redirect(url_for('index'))
-
 @app.route('/clear-all', methods=['POST'])
 def clear_all():
-    # Bersihkan input dan output
+    ensure_dirs()
     for folder in [app.config['UPLOAD_FOLDER'], app.config['OUTPUT_FOLDER']]:
         for filename in os.listdir(folder):
             file_path = os.path.join(folder, filename)
             if os.path.isfile(file_path):
                 os.remove(file_path)
-    
-    logger.info("STORAGE | Semua data dibersihkan oleh user.")
-    flash('Semua file (Data & Settlement) telah dibersihkan!', 'success')
+    flash('Storage dibersihkan!', 'success')
     return redirect(url_for('index'))
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+# Export app untuk Vercel
+app.debug = False
