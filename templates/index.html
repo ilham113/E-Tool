@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Settlement E-Money</title>
+    <title>Tool Settlement E-Money</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 <body class="bg-light container py-5">
@@ -19,31 +20,29 @@
         <div class="card-body p-4">
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}{% for category, message in messages %}
-                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
-                        {{ message }} <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>
+                    <div class="alert alert-{{ category }} alert-dismissible fade show small">{{ message }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
                 {% endfor %}{% endif %}
             {% endwith %}
 
             <form action="/upload" method="post" enctype="multipart/form-data">
-                <div class="row mb-3">
-                    <div class="col-md-4 mb-3">
-                        <label class="fw-bold">Jenis Data:</label>
-                        <select name="data_type" class="form-select">
+                <div class="row g-3 mb-3">
+                    <div class="col-md-4">
+                        <label class="fw-bold small">Jenis Data:</label>
+                        <select name="data_type" class="form-select form-select-sm">
                             <option value="raw">Raw Data (.txt)</option>
                             <option value="nok">Data Error (.NOK)</option>
                         </select>
                     </div>
-                    <div class="col-md-8 mb-3">
-                        <label class="fw-bold">Pilih File:</label>
-                        <input type="file" name="files" class="form-control" multiple required>
+                    <div class="col-md-8">
+                        <label class="fw-bold small">Pilih File:</label>
+                        <input type="file" name="files" class="form-control form-control-sm" multiple required>
                     </div>
-                    <div class="col-md-12 mb-3">
-                        <label class="fw-bold text-primary">Auth Password (Duta@321):</label>
-                        <input type="password" name="password" class="form-control" required>
+                    <div class="col-12">
+                        <label class="fw-bold small text-primary">Auth Password (Duta@321):</label>
+                        <input type="password" name="password" class="form-control form-control-sm" required>
                     </div>
                 </div>
-                <button class="btn btn-primary w-100 fw-bold" type="submit"><i class="fas fa-file-import"></i> BACA DATA</button>
+                <button class="btn btn-primary w-100 fw-bold" type="submit">BACA DATA</button>
             </form>
         </div>
     </div>
@@ -52,34 +51,32 @@
     <form action="/process_settlement" method="post">
         <div class="card shadow-sm border-0 mb-4">
             <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Overview Transaksi Per File</h5>
-                <button type="submit" class="btn btn-success btn-sm fw-bold">PROSES SETTLEMENT TERPILIH</button>
+                <h6 class="mb-0">Overview Transaksi Per File</h6>
+                <button type="submit" class="btn btn-success btn-sm">SETTLEMENT TERPILIH</button>
             </div>
             <div class="table-responsive">
-                <table class="table table-hover mb-0">
-                    <thead class="table-secondary text-center">
+                <table class="table table-sm table-hover mb-0">
+                    <thead class="table-secondary text-center small">
                         <tr>
-                            <th width="50"><input type="checkbox" id="selectAll"></th>
+                            <th><input type="checkbox" id="selectAll"></th>
                             <th class="text-start">Filename</th>
                             <th>Trx</th>
-                            <th>Total Nominal</th>
-                            <th class="text-start">Rincian Error</th>
+                            <th>Nominal</th>
+                            <th class="text-start">Error Detail</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody class="small">
                         {% for item in overview %}
                         <tr>
                             <td class="text-center"><input type="checkbox" name="selected_files" value="{{ item.filename }}"></td>
-                            <td class="small">{{ item.filename }}</td>
+                            <td>{{ item.filename }}</td>
                             <td class="text-center">{{ item.total }}</td>
                             <td class="text-center">Rp {{ "{:,.0f}".format(item.nominal).replace(',', '.') }}</td>
                             <td>
                                 {% for code, qty in item.errors.items() %}
-                                    <span class="badge {{ 'bg-warning text-dark' if code == '02' else 'bg-danger' }} mb-1">
+                                    <span class="badge {{ 'bg-warning text-dark' if code == '02' else 'bg-danger' }}">
                                         {{ code }}: {{ qty }} {{ '(SKIP)' if code == '02' else '' }}
                                     </span>
-                                {% else %}
-                                    <span class="text-success small"><i class="fas fa-check"></i> Clean</span>
                                 {% endfor %}
                             </td>
                         </tr>
@@ -91,44 +88,80 @@
     </form>
     {% endif %}
 
-    <div class="d-flex justify-content-between align-items-center mb-2 mt-4">
-        <h5 class="text-secondary mb-0">Hasil Settlement Siap Kirim</h5>
-        <form action="/clear-all" method="post" onsubmit="return confirm('Hapus semua data?')">
-            <button type="submit" class="btn btn-outline-danger btn-sm">Clear All Data</button>
-        </form>
-    </div>
-    <div class="card shadow-sm border-0">
-        <div class="table-responsive">
-            <table class="table table-hover mb-0">
-                <thead class="table-dark text-center">
-                    <tr>
-                        <th>Nama File Output</th>
-                        <th>Jumlah Trx</th>
-                        <th>Total Rupiah</th>
-                        <th>Aksi</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for s in settlements %}
-                    <tr class="text-center">
-                        <td class="text-start ps-3 small">{{ s.name }}</td>
-                        <td>{{ s.count }}</td>
-                        <td class="fw-bold">Rp {{ "{:,.0f}".format(s.amount).replace(',', '.') }}</td>
-                        <td><a href="/download/{{ s.name }}" class="btn btn-success btn-sm"><i class="fas fa-download"></i></a></td>
-                    </tr>
-                    {% else %}
-                    <tr><td colspan="4" class="text-center py-4 text-muted">Belum ada file settlement yang dibuat.</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+    {% if all_transaksi %}
+    <div class="card shadow-sm border-0 mb-4 mt-5">
+        <div class="card-header bg-secondary text-white">
+            <h6 class="mb-0"><i class="fas fa-database"></i> Database Semua Transaksi (All Data)</h6>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table id="tableAllData" class="table table-striped table-bordered table-sm small">
+                    <thead>
+                        <tr>
+                            <th>Filename</th>
+                            <th>TID</th>
+                            <th>No Kartu</th>
+                            <th>Tarif</th>
+                            <th>Error</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for trx in all_transaksi %}
+                        <tr>
+                            <td>{{ trx.filename }}</td>
+                            <td>{{ trx.tid }}</td>
+                            <td>{{ trx.no_kartu }}</td>
+                            <td class="text-end">{{ "{:,.0f}".format(trx.tarif).replace(',', '.') }}</td>
+                            <td class="text-center">
+                                <span class="badge {{ 'bg-warning text-dark' if trx.error_code == '02' else 'bg-danger' if trx.error_code else 'bg-success' }}">
+                                    {{ trx.error_code if trx.error_code else 'OK' }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
+    {% endif %}
 
+    <div class="d-flex justify-content-between align-items-center mb-2 mt-4">
+        <h6 class="text-secondary mb-0">Hasil Settlement Siap Kirim</h6>
+        <form action="/clear-all" method="post" onsubmit="return confirm('Hapus semua data?')"><button type="submit" class="btn btn-link btn-sm text-danger text-decoration-none">Clear All Data</button></form>
+    </div>
+    <div class="card shadow-sm border-0">
+        <table class="table table-sm mb-0 small">
+            <thead class="table-dark text-center">
+                <tr><th>Output File</th><th>Trx</th><th>Total</th><th>Aksi</th></tr>
+            </thead>
+            <tbody>
+                {% for s in settlements %}
+                <tr class="text-center">
+                    <td class="text-start ps-3">{{ s.name }}</td><td>{{ s.count }}</td>
+                    <td class="fw-bold">Rp {{ "{:,.0f}".format(s.amount).replace(',', '.') }}</td>
+                    <td><a href="/download/{{ s.name }}" class="btn btn-success btn-xs py-0 px-2"><i class="fas fa-download"></i></a></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="text-center py-4 text-muted">Belum ada file settlement.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.7.0.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
     <script>
-        document.getElementById('selectAll').onclick = function() {
-            var checkboxes = document.getElementsByName('selected_files');
-            for (var checkbox of checkboxes) checkbox.checked = this.checked;
-        }
+        $(document).ready(function() {
+            $('#tableAllData').DataTable({
+                "pageLength": 5,
+                "language": { "url": "//cdn.datatables.net/plug-ins/1.13.6/i18n/id.json" }
+            });
+            $('#selectAll').on('click', function() {
+                $('input[name="selected_files"]').prop('checked', this.checked);
+            });
+        });
     </script>
 </body>
 </html>
