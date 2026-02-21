@@ -1,22 +1,20 @@
 import os
 import io
-import shutil
 import pandas as pd
 from flask import Flask, render_template, jsonify, send_file, request
 from datetime import datetime
 
 app = Flask(__name__, template_folder='../templates')
 
-# Konfigurasi Path untuk Vercel (Penyimpanan Sementara di RAM/Disk Temp)
+# Konfigurasi Path untuk Vercel (/tmp bersifat writeable)
 DATA_DIR = '/tmp/data'
 KIRIM_DIR = '/tmp/kirim'
 
-# Pastikan direktori tersedia saat runtime
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(KIRIM_DIR, exist_ok=True)
 
 def parse_all_logs():
-    """Memproses semua file .txt di folder /tmp/data dengan parsing hex sesuai notebook"""
+    """Memproses file .txt dengan parsing hexadesimal"""
     all_data = []
     if not os.path.exists(DATA_DIR):
         return pd.DataFrame()
@@ -25,12 +23,11 @@ def parse_all_logs():
         if file_name.endswith('.txt'):
             path = os.path.join(DATA_DIR, file_name)
             with open(path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-                for line in lines:
+                for line in f.readlines():
                     hexdata = line.strip()
                     if len(hexdata) < 94: continue
                     
-                    # Menambahkan prefix 0200a900000000 sesuai logika pemrosesan
+                    # Logic notebook: prefix + parsing
                     full_hex = '0200a900000000' + hexdata
                     try:
                         all_data.append({
@@ -53,7 +50,6 @@ def index():
 
 @app.route('/api/init')
 def get_initial_data():
-    """Mengambil seluruh transaksi dan daftar file untuk Overview"""
     df = parse_all_logs()
     if df.empty:
         return jsonify({'all': [], 'overview': []})
@@ -68,7 +64,7 @@ def get_initial_data():
 
 @app.route('/api/settlement/multiple', methods=['POST'])
 def get_settlement_multiple():
-    """Proses agregasi settlement untuk multiple files yang dipilih di UI"""
+    """Agregasi data settlement dengan menampilkan filename"""
     data = request.get_json()
     filenames = data.get('filenames', [])
     
@@ -76,10 +72,9 @@ def get_settlement_multiple():
     if df.empty or not filenames:
         return jsonify([])
 
-    # Filter data berdasarkan list file yang dipilih user
+    # Grouping menyertakan filename untuk tampilan tabel
     filtered = df[df['filename'].isin(filenames)]
-    
-    settlement = filtered.groupby(['mid', 'tid']).agg(
+    settlement = filtered.groupby(['filename', 'mid', 'tid']).agg(
         trxcount=('no_kartu', 'count'),
         trxamount=('tarif', 'sum')
     ).reset_index()
@@ -87,51 +82,46 @@ def get_settlement_multiple():
     settlement['wktsetel'] = datetime.now().strftime("%Y%m%d%H%M%S")
     return jsonify(settlement.to_dict(orient='records'))
 
-@app.route('/api/download_multiple')
-def download_multiple():
-    """Generate file gabungan .txt untuk file yang dipilih dan simpan di /tmp/kirim"""
-    files_param = request.args.get('files', '')
-    if not files_param: return "No files selected", 400
-    
-    filenames = files_param.split(',')
+@app.route('/api/download_single/<filename>')
+def download_single(filename):
+    """Download individual per file sesuai format settlement"""
     df = parse_all_logs()
-    filtered = df[df['filename'].isin(filenames)]
+    filtered = df[df['filename'] == filename]
     
-    if filtered.empty: return "Data Not Found", 404
+    if filtered.empty: return "Not Found", 404
 
-    # Format Header: Total Count (3 digit) + Total Amount (10 digit)
+    # Header: Count(3) + Amount(10)
     header = f"{len(filtered):03d}{filtered['tarif'].sum():010d}"
     
     wkt = datetime.now().strftime("%Y%m%d%H%M%S")
-    nama_output = f"SETTLE_COMBINED_{wkt}.txt"
-    file_path = os.path.join(KIRIM_DIR, nama_output)
+    mid, tid = filtered.iloc[0]['mid'], filtered.iloc[0]['tid']
+    nama_output = f"{wkt}{mid}{tid}01001.txt"
+    
+    output = io.StringIO()
+    output.write(header + "\n")
+    for _, row in filtered.iterrows():
+        output.write(row['respon'][14:] + "\n") # Potong prefix
 
-    with open(file_path, 'w') as f:
-        f.write(header + "\n")
-        for _, row in filtered.iterrows():
-            # Tulis data asli tanpa prefix 14 karakter pertama
-            f.write(row['respon'][14:] + "\n")
-
-    return send_file(file_path, as_attachment=True, download_name=nama_output)
+    mem = io.BytesIO()
+    mem.write(output.getvalue().encode('utf-8'))
+    mem.seek(0)
+    
+    return send_file(mem, as_attachment=True, download_name=nama_output, mimetype='text/plain')
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
-    """Endpoint untuk upload file .txt ke /tmp/data"""
-    if 'file' not in request.files: return jsonify({'error': 'No file'}), 400
-    file = request.files['file']
-    if file.filename == '': return jsonify({'error': 'No filename'}), 400
-    
-    file.save(os.path.join(DATA_DIR, file.filename))
-    return jsonify({'message': 'Upload success'})
+    file = request.files.get('file')
+    if file:
+        file.save(os.path.join(DATA_DIR, file.filename))
+        return jsonify({'message': 'Success'})
+    return jsonify({'error': 'No file'}), 400
 
 @app.route('/api/clear-data', methods=['POST'])
 def clear_data():
-    """Membersihkan folder /tmp/data dan /tmp/kirim secara fisik"""
     for folder in [DATA_DIR, KIRIM_DIR]:
-        if os.path.exists(folder):
-            for file in os.listdir(folder):
-                os.remove(os.path.join(folder, file))
-    return jsonify({'status': 'success', 'message': 'Storage cleared.'})
+        for f in os.listdir(folder):
+            os.remove(os.path.join(folder, f))
+    return jsonify({'status': 'success'})
 
 if __name__ == '__main__':
     app.run(debug=True)
