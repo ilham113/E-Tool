@@ -1,214 +1,140 @@
 import os
-import pandas as pd
+import io
 import shutil
-import json
-from flask import Flask, render_template, request, redirect, url_for, send_from_directory, flash
+import pandas as pd
+from flask import Flask, render_template, jsonify, send_file, request
 from datetime import datetime
 
-# 1. SETUP PATH
-base_dir = os.path.dirname(os.path.abspath(__file__))
-template_dir = os.path.join(base_dir, '..', 'templates')
+app = Flask(__name__, template_folder='../templates')
 
-app = Flask(__name__, template_folder=template_dir)
-app.secret_key = 'duta1234'
+# Konfigurasi Path untuk Vercel (Penyimpanan Sementara)
+DATA_DIR = '/tmp/data'
+KIRIM_DIR = '/tmp/kirim'
 
-# 2. KONFIGURASI FOLDER
-UPLOAD_FOLDER = '/tmp/data'
-OUTPUT_FOLDER = '/tmp/kirim'
-CONFIG_FILE = '/tmp/error_codes.txt'
-ALL_DATA_FILE = '/tmp/all_transaksi.json'
+# Pastikan folder tersedia di lingkungan runtime
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(KIRIM_DIR, exist_ok=True)
 
-def ensure_dirs():
-    for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER]:
-        os.makedirs(folder, exist_ok=True)
-    if not os.path.exists(CONFIG_FILE):
-        original_path = os.path.join(base_dir, 'error_codes.txt')
-        if os.path.exists(original_path):
-            shutil.copy(original_path, CONFIG_FILE)
-        else:
-            with open(CONFIG_FILE, 'w') as f:
-                f.write("03=Count Mismatch\n")
+def parse_all_logs():
+    """Fungsi untuk memproses semua file .txt di folder /tmp/data"""
+    all_data = []
+    if not os.path.exists(DATA_DIR):
+        return pd.DataFrame()
 
-def clean_error_codes():
-    """Proteksi sistem: Hapus kode 02 dari config fisik agar tidak bentrok dengan auto-skip."""
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r') as f:
-            lines = f.readlines()
-        with open(CONFIG_FILE, 'w') as f:
-            for line in lines:
-                if not line.startswith('02='):
-                    f.write(line)
-
-def get_error_mapping():
-    mapping = {}
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r') as f:
-            for line in f:
-                if '=' in line:
-                    code, desc = line.strip().split('=', 1)
-                    mapping[code] = desc
-    mapping['02'] = "Duplicate Data (Auto-Skip)"
-    return mapping
+    for file_name in os.listdir(DATA_DIR):
+        if file_name.endswith('.txt'):
+            path = os.path.join(DATA_DIR, file_name)
+            with open(path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                for idx, line in enumerate(lines):
+                    hexdata = line.strip()
+                    if len(hexdata) < 94:
+                        continue
+                    
+                    # Logic: Tambahkan prefix sesuai tool_emoney_.ipynb
+                    full_hex = '0200a900000000' + hexdata
+                    try:
+                        all_data.append({
+                            'filename': file_name,
+                            'mid': full_hex[16:32],
+                            'tid': full_hex[32:40],
+                            'kode_bank': full_hex[14:16],
+                            'no_kartu': full_hex[54:70],
+                            'tarif': int(full_hex[70:78], 16),
+                            'saldo': int(full_hex[78:86], 16),
+                            'trx_date': f"{full_hex[40:42]}-{full_hex[42:44]}-{full_hex[44:48]} {full_hex[48:50]}:{full_hex[50:52]}:{full_hex[52:54]}",
+                            'respon': full_hex
+                        })
+                    except:
+                        continue
+    return pd.DataFrame(all_data)
 
 @app.route('/')
 def index():
-    ensure_dirs()
-    clean_error_codes()
-    error_map = get_error_mapping()
+    return render_template('index.html')
+
+@app.route('/api/init')
+def get_initial_data():
+    """Mengambil data All Transactions dan Overview Filename"""
+    df = parse_all_logs()
+    if df.empty:
+        return jsonify({'all': [], 'overview': []})
     
-    all_transaksi = []
-    overview = []
+    all_transactions = df.to_dict(orient='records')
+    overview = df.groupby('filename').agg(
+        total_trx=('no_kartu', 'count'),
+        total_amount=('tarif', 'sum')
+    ).reset_index().to_dict(orient='records')
     
-    if os.path.exists(ALL_DATA_FILE):
-        with open(ALL_DATA_FILE, 'r') as f:
-            try:
-                all_transaksi = json.load(f)
-                if all_transaksi:
-                    df = pd.DataFrame(all_transaksi)
-                    for fname in df['filename'].unique():
-                        f_df = df[df['filename'] == fname]
-                        err_counts = f_df[f_df['error_code'] != ""]['error_code'].value_counts().to_dict()
-                        overview.append({
-                            'filename': fname,
-                            'total': len(f_df),
-                            'nominal': f_df['tarif'].sum(),
-                            'errors': err_counts
-                        })
-            except: pass
+    return jsonify({'all': all_transactions, 'overview': overview})
 
-    settlements = []
-    if os.path.exists(OUTPUT_FOLDER):
-        for f in sorted(os.listdir(OUTPUT_FOLDER), reverse=True):
-            if f.endswith('.txt'):
-                try:
-                    with open(os.path.join(OUTPUT_FOLDER, f), 'r') as file:
-                        header = file.readline().strip()
-                        settlements.append({
-                            'name': f, 
-                            'count': int(header[:3]), 
-                            'amount': int(header[3:13])
-                        })
-                except: continue
-
-    return render_template('index.html', 
-                           overview=overview, 
-                           all_transaksi=all_transaksi, 
-                           settlements=settlements, 
-                           error_map=error_map)
-
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    ensure_dirs()
-    if request.form.get('password') != 'Duta@321':
-        flash('Password Auth Salah!', 'danger')
-        return redirect(url_for('index'))
-        
-    data_type = request.form.get('data_type', 'raw')
-    files = request.files.getlist('files')
+@app.route('/api/settlement/<filename>')
+def get_settlement(filename):
+    """Mengambil data agregasi (Settlement) untuk file tertentu"""
+    df = parse_all_logs()
+    filtered = df[df['filename'] == filename]
     
-    all_data = []
-    if os.path.exists(ALL_DATA_FILE):
-        with open(ALL_DATA_FILE, 'r') as f:
-            try: all_data = json.load(f)
-            except: all_data = []
+    if filtered.empty:
+        return jsonify([])
 
-    for file in files:
-        if file.filename:
-            file_path = os.path.join(UPLOAD_FOLDER, file.filename)
-            file.save(file_path)
-            with open(file_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line: continue
-                    parts = line.split(" ")
-                    err = parts[-1].replace('"', '') if data_type == 'nok' and len(parts) > 1 else ""
-                    hexdata = parts[0] if data_type == 'nok' else line
-                    if len(hexdata) >= 94:
-                        full_hex = '0200a900000000' + hexdata
-                        try:
-                            all_data.append({
-                                'mid': full_hex[16:32], 'tid': full_hex[32:40],
-                                'no_kartu': full_hex[54:70], 'tarif': int(full_hex[70:78], 16),
-                                'respon': full_hex, 'error_code': err, 'filename': file.filename
-                            })
-                        except: continue
+    settlement = filtered.groupby(['mid', 'tid']).agg(
+        trxcount=('no_kartu', 'count'),
+        trxamount=('tarif', 'sum')
+    ).reset_index()
     
-    with open(ALL_DATA_FILE, 'w') as f: json.dump(all_data, f)
-    flash(f'{len(files)} File berhasil dibaca.', 'success')
-    return redirect(url_for('index'))
+    settlement['wktsetel'] = datetime.now().strftime("%Y%m%d%H%M%S")
+    return jsonify(settlement.to_dict(orient='records'))
 
-@app.route('/process_settlement', methods=['POST'])
-def process_settlement():
-    selected_files = request.form.getlist('selected_files')
-    if not selected_files or not os.path.exists(ALL_DATA_FILE):
-        flash('Pilih file untuk settlement!', 'warning')
-        return redirect(url_for('index'))
-
-    with open(ALL_DATA_FILE, 'r') as f: all_data = json.load(f)
-    df = pd.DataFrame(all_data)
+@app.route('/api/download/<filename>')
+def download_settlement(filename):
+    """Menghasilkan file .txt settlement di /tmp/kirim dan mengirimnya ke user"""
+    df = parse_all_logs()
+    filtered = df[df['filename'] == filename]
     
-    # FILTER FILENAME & SKIP ERROR 02
-    df_filtered = df[(df['filename'].isin(selected_files)) & (df['error_code'] != '02')]
+    if filtered.empty:
+        return "Data Not Found", 404
 
-    if df_filtered.empty:
-        flash('Tidak ada data valid (Semua ter-filter 02 atau kosong).', 'danger')
-        return redirect(url_for('index'))
-
+    # Format Header: Count(3 digit) + Amount(10 digit)
+    header = f"{len(filtered):03d}{filtered['tarif'].sum():010d}"
+    
+    # Generate Nama File Settlement
     wkt = datetime.now().strftime("%Y%m%d%H%M%S")
-    for tid in df_filtered['tid'].unique():
-        subset = df_filtered[df_filtered['tid'] == tid]
-        mid = subset.iloc[0]['mid']
-        nama_out = f"{wkt}{mid}{tid}01001.txt"
-        with open(os.path.join(OUTPUT_FOLDER, nama_out), "w") as f:
-            f.write(f"{len(subset):03d}{subset['tarif'].sum():010d}RAW\n")
-            for _, row in subset.iterrows():
-                f.write(row['respon'][14:] + "\n")
+    mid = filtered.iloc[0]['mid']
+    tid = filtered.iloc[0]['tid']
+    nama_file_setel = f"{wkt}{mid}{tid}01001.txt"
     
-    flash('Settlement Berhasil Dibuat!', 'success')
-    return redirect(url_for('index'))
+    file_path = os.path.join(KIRIM_DIR, nama_file_setel)
 
-@app.route('/config', methods=['GET', 'POST'])
-def config_errors():
-    ensure_dirs()
-    clean_error_codes()
-    auth = request.args.get('auth_pass') or request.form.get('auth_pass')
-    if auth != 'setdutaparkir@321':
-        return render_template('login_config.html')
+    with open(file_path, 'w') as f:
+        f.write(header + "\n")
+        for _, row in filtered.iterrows():
+            # Mengambil data asli tanpa prefix (0200a900000000)
+            f.write(row['respon'][14:] + "\n")
 
-    error_map = get_error_mapping()
-    if request.method == 'POST':
-        code = request.form.get('code')
-        desc = request.form.get('desc')
-        if 'add_code' in request.form:
-            if code == "02":
-                flash("Kode 02 diproteksi sistem sebagai Auto-Skip Duplicate!", "danger")
-            elif code and desc:
-                error_map[code] = desc
-                with open(CONFIG_FILE, 'w') as f:
-                    for k, v in error_map.items():
-                        if k != '02': f.write(f"{k}={v}\n")
-                flash(f'Kode {code} berhasil disimpan.', 'success')
-        elif 'delete_code' in request.form:
-            del_code = request.form.get('delete_code')
-            if del_code in error_map and del_code != "02":
-                del error_map[del_code]
-                with open(CONFIG_FILE, 'w') as f:
-                    for k, v in error_map.items():
-                        if k != '02': f.write(f"{k}={v}\n")
-                flash(f'Kode {del_code} berhasil dihapus.', 'danger')
+    return send_file(file_path, as_attachment=True, download_name=nama_file_setel)
+
+@app.route('/api/clear-data', methods=['POST'])
+def clear_data():
+    """Menghapus semua file di folder /tmp/data dan /tmp/kirim"""
+    deleted_count = 0
+    for folder in [DATA_DIR, KIRIM_DIR]:
+        if os.path.exists(folder):
+            for file in os.listdir(folder):
+                os.remove(os.path.join(folder, file))
+                deleted_count += 1
+    return jsonify({'status': 'success', 'message': f'Berhasil menghapus {deleted_count} file.'})
+
+# Handler untuk Upload (Opsional agar bisa testing di Vercel)
+@app.route('/api/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
     
-    display_map = {k: v for k, v in error_map.items() if k != "02"}
-    return render_template('config.html', error_map=display_map, auth_pass=auth)
+    file.save(os.path.join(DATA_DIR, file.filename))
+    return jsonify({'message': 'File uploaded successfully'})
 
-@app.route('/clear-all', methods=['POST'])
-def clear_all():
-    for f in [ALL_DATA_FILE, UPLOAD_FOLDER, OUTPUT_FOLDER]:
-        if os.path.isfile(f): os.remove(f)
-        elif os.path.isdir(f):
-            for file in os.listdir(f): os.remove(os.path.join(f, file))
-    return redirect(url_for('index'))
-
-@app.route('/download/<filename>')
-def download_file(filename):
-    return send_from_directory(OUTPUT_FOLDER, filename)
-
+if __name__ == '__main__':
+    app.run(debug=True)
