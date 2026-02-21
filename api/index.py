@@ -62,7 +62,6 @@ def get_initial_data():
 
 @app.route('/api/settlement/process', methods=['POST'])
 def process_settlement():
-    """Mengimplementasikan logika settlement sesuai kode .ipynb Anda"""
     data_req = request.get_json()
     selected_filenames = data_req.get('filenames', [])
     
@@ -70,16 +69,12 @@ def process_settlement():
     if df_raw.empty or not selected_filenames:
         return jsonify([])
 
-    # Filter data berdasarkan file yang dipilih
     bayar_df = df_raw[df_raw['filename'].isin(selected_filenames)].copy()
-    
-    # Ambil MID/TID unik dari data yang difilter (seperti pintu_df)
     pintu_df = bayar_df[['mid', 'tid']].drop_duplicates()
     
-    setel_df = pd.DataFrame(columns=['filename_source', 'tanggal', 'wktsetel', 'mid', 'tid', 'versi', 'bat', 'trxcount', 'trxamount'])
+    setel_df = pd.DataFrame(columns=['filename_source', 'mid', 'tid', 'bat', 'trxcount', 'trxamount', 'download_path'])
     wkt = datetime.now().strftime("%Y%m%d%H%M%S")
 
-    # Proses per pintu (MID/TID) sesuai logika Anda
     for _, b in pintu_df.iterrows():
         mid, tid = b['mid'], b['tid']
         semua = bayar_df[(bayar_df['tid'] == tid) & (bayar_df['mid'] == mid)]
@@ -88,40 +83,27 @@ def process_settlement():
         for x in range(maxbat):
             bat_num = x + 1
             isibat = f"{bat_num:03d}"
-            
             data_batch = semua.iloc[x*999 : (x+1)*999]
+            
             if not data_batch.empty:
                 trxamount = data_batch['tarif'].sum()
-                row_setel = {
-                    'filename_source': ", ".join(selected_filenames),
-                    'tanggal': datetime.now().date().isoformat(),
-                    'wktsetel': wkt,
-                    'mid': mid,
-                    'tid': tid,
-                    'versi': '01',
-                    'bat': isibat,
-                    'trxcount': len(data_batch),
-                    'trxamount': int(trxamount)
-                }
-                setel_df = pd.concat([setel_df, pd.DataFrame([row_setel])], ignore_index=True)
-                
-                # Simpan file fisik di /tmp/kirim
-                heder = f"{len(data_batch):03d}{int(trxamount):010d}"
                 nama_file = f"{wkt}{mid}{tid}01{isibat}.txt"
                 filepath = os.path.join(KIRIM_DIR, nama_file)
                 
+                # Simpan file fisik
+                header = f"{len(data_batch):03d}{int(trxamount):010d}"
                 with open(filepath, "w") as f:
-                    f.write(heder + "\n")
-                    for _, row_trx in data_batch.iterrows():
-                        f.write(row_trx['respon'][14:] + "\n")
+                    f.write(header + "\n")
+                    for _, row in data_batch.iterrows():
+                        f.write(row['respon'][14:] + "\n")
+
+                setel_df = pd.concat([setel_df, pd.DataFrame([{
+                    'mid': mid, 'tid': tid, 'bat': isibat,
+                    'trxcount': len(data_batch), 'trxamount': int(trxamount),
+                    'download_path': nama_file
+                }])], ignore_index=True)
 
     return jsonify(setel_df.to_dict(orient='records'))
-
-@app.route('/api/download_ready')
-def download_ready():
-    """Download semua file yang baru saja dibuat di /tmp/kirim"""
-    files = [f for f in os.listdir(KIRIM_DIR)]
-    return jsonify(files)
 
 @app.route('/api/get_file/<name>')
 def get_file(name):
@@ -129,17 +111,18 @@ def get_file(name):
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
-    file = request.files.get('file')
-    if file:
-        file.save(os.path.join(DATA_DIR, file.filename))
-        return jsonify({'message': 'Success'})
-    return jsonify({'error': 'No file'}), 400
+    files = request.files.getlist('file')
+    for file in files:
+        if file:
+            file.save(os.path.join(DATA_DIR, file.filename))
+    return jsonify({'message': 'Success'})
 
 @app.route('/api/clear-data', methods=['POST'])
 def clear_data():
     for folder in [DATA_DIR, KIRIM_DIR]:
-        for f in os.listdir(folder):
-            os.remove(os.path.join(folder, f))
+        if os.path.exists(folder):
+            for f in os.listdir(folder):
+                os.remove(os.path.join(folder, f))
     return jsonify({'status': 'success'})
 
 if __name__ == '__main__':
