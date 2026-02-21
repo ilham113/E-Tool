@@ -16,7 +16,7 @@
 
 <div class="container py-5">
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h3>💳 E-Money Tool API</h3>
+        <h3>💳 E-Money Tool (Settlement Engine)</h3>
         <div>
             <input type="file" id="fileInput" class="d-none" multiple>
             <button class="btn btn-outline-info btn-sm me-2" onclick="$('#fileInput').click()">Upload Logs</button>
@@ -25,40 +25,23 @@
     </div>
 
     <div class="card">
-        <div class="card-header">1. All Transactions</div>
-        <div class="card-body table-container">
-            <table id="tableAll" class="table table-sm table-striped w-100">
-                <thead>
-                    <tr><th>Date</th><th>Bank</th><th>Card Number</th><th>Amount</th><th>Source</th></tr>
-                </thead>
-            </table>
-        </div>
-    </div>
-
-    <div class="card">
-        <div class="card-header">2. Select Files (Multiple)</div>
-        <div class="card-body table-container">
-            <div class="row g-3">
-                <div class="col-md-9">
-                    <select id="selectFiles" class="form-select" multiple style="height: 120px;"></select>
-                </div>
-                <div class="col-md-3">
-                    <button id="btnProcess" class="btn btn-primary w-100 h-100">⚙️ Process Files</button>
-                </div>
-            </div>
+        <div class="card-header">1. Select Logs for Settlement</div>
+        <div class="card-body table-container text-dark">
+            <select id="selectFiles" class="form-select mb-3" multiple style="height: 120px;"></select>
+            <button id="btnProcess" class="btn btn-primary w-100">⚙️ Jalankan Proses Settlement</button>
         </div>
     </div>
 
     <div class="card border-info">
         <div class="card-header d-flex justify-content-between align-items-center">
-            <span>3. Aggregated Settlement Detail</span>
-            <button id="btnDownloadAll" class="btn btn-sm btn-success d-none">📥 Download Each (.txt)</button>
+            <span>2. Hasil Settlement (Generated Files)</span>
+            <button id="btnDownloadAll" class="btn btn-sm btn-success d-none">📥 Download Semua File Settlement</button>
         </div>
         <div class="card-body table-container">
             <table id="tableSettlement" class="table table-bordered w-100 d-none">
                 <thead>
                     <tr>
-                        <th>Filename</th> <th>MID</th><th>TID</th><th>Date</th><th>Count</th><th>Amount</th>
+                        <th>MID</th><th>TID</th><th>Batch</th><th>Trx Count</th><th>Total Amount</th>
                     </tr>
                 </thead>
             </table>
@@ -71,38 +54,35 @@
 <script src="https://cdn.datatables.net/1.13.4/js/dataTables.bootstrap5.min.js"></script>
 
 <script>
-    let selectedFiles = [];
-
     $(document).ready(function() {
-        const tAll = $('#tableAll').DataTable({ pageLength: 5 });
         const tSet = $('#tableSettlement').DataTable({ paging: false });
-
         refresh();
 
         $('#btnProcess').on('click', function() {
-            selectedFiles = $('#selectFiles').val();
-            if(!selectedFiles || selectedFiles.length === 0) return alert('Pilih file!');
+            const files = $('#selectFiles').val();
+            if(!files || files.length === 0) return alert('Pilih file!');
             
-            $('#tableSettlement, #btnDownloadAll').removeClass('d-none');
             $.ajax({
-                url: '/api/settlement/multiple',
+                url: '/api/settlement/process',
                 type: 'POST',
                 contentType: 'application/json',
-                data: JSON.stringify({ filenames: selectedFiles }),
+                data: JSON.stringify({ filenames: files }),
                 success: function(res) {
+                    $('#tableSettlement, #btnDownloadAll').removeClass('d-none');
                     tSet.clear().rows.add(res.map(s => [
-                        s.filename, s.mid, s.tid, s.wktsetel, s.trxcount, `Rp ${s.trxamount.toLocaleString()}`
+                        s.mid, s.tid, s.bat, s.trxcount, `Rp ${s.trxamount.toLocaleString()}`
                     ])).draw();
                 }
             });
         });
 
-        // Download Per File (Looping)
         $('#btnDownloadAll').on('click', function() {
-            selectedFiles.forEach((file, i) => {
-                setTimeout(() => {
-                    window.open(`/api/download_single/${file}`, '_blank');
-                }, i * 1000); // Delay agar browser tidak memblokir download
+            $.get('/api/download_ready', function(files) {
+                files.forEach((file, i) => {
+                    setTimeout(() => {
+                        window.open(`/api/get_file/${file}`, '_blank');
+                    }, i * 1000);
+                });
             });
         });
 
@@ -111,7 +91,7 @@
             for(let i=0; i<files.length; i++){
                 let fd = new FormData(); fd.append('file', files[i]);
                 $.ajax({ url: '/api/upload', type: 'POST', data: fd, processData: false, contentType: false, 
-                    success: () => { if(i === files.length-1) refresh(); } 
+                    success: () => { if(i === files.length-1) { alert('Upload Selesai'); refresh(); } } 
                 });
             }
         });
@@ -121,9 +101,6 @@
 
     function refresh() {
         $.get('/api/init', (data) => {
-            $('#tableAll').DataTable().clear().rows.add(data.all.map(t => [
-                t.trx_date, t.kode_bank, t.no_kartu, t.tarif, t.filename
-            ])).draw();
             $('#selectFiles').empty();
             data.overview.forEach(f => {
                 $('#selectFiles').append(`<option value="${f.filename}">${f.filename} (${f.total_trx} Trx)</option>`);

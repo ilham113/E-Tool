@@ -14,7 +14,6 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(KIRIM_DIR, exist_ok=True)
 
 def parse_all_logs():
-    """Memproses file .txt dengan parsing hexadesimal"""
     all_data = []
     if not os.path.exists(DATA_DIR):
         return pd.DataFrame()
@@ -27,7 +26,6 @@ def parse_all_logs():
                     hexdata = line.strip()
                     if len(hexdata) < 94: continue
                     
-                    # Logic notebook: prefix + parsing
                     full_hex = '0200a900000000' + hexdata
                     try:
                         all_data.append({
@@ -62,51 +60,72 @@ def get_initial_data():
     
     return jsonify({'all': all_transactions, 'overview': overview})
 
-@app.route('/api/settlement/multiple', methods=['POST'])
-def get_settlement_multiple():
-    """Agregasi data settlement dengan menampilkan filename"""
-    data = request.get_json()
-    filenames = data.get('filenames', [])
+@app.route('/api/settlement/process', methods=['POST'])
+def process_settlement():
+    """Mengimplementasikan logika settlement sesuai kode .ipynb Anda"""
+    data_req = request.get_json()
+    selected_filenames = data_req.get('filenames', [])
     
-    df = parse_all_logs()
-    if df.empty or not filenames:
+    df_raw = parse_all_logs()
+    if df_raw.empty or not selected_filenames:
         return jsonify([])
 
-    # Grouping menyertakan filename untuk tampilan tabel
-    filtered = df[df['filename'].isin(filenames)]
-    settlement = filtered.groupby(['filename', 'mid', 'tid']).agg(
-        trxcount=('no_kartu', 'count'),
-        trxamount=('tarif', 'sum')
-    ).reset_index()
+    # Filter data berdasarkan file yang dipilih
+    bayar_df = df_raw[df_raw['filename'].isin(selected_filenames)].copy()
     
-    settlement['wktsetel'] = datetime.now().strftime("%Y%m%d%H%M%S")
-    return jsonify(settlement.to_dict(orient='records'))
-
-@app.route('/api/download_single/<filename>')
-def download_single(filename):
-    """Download individual per file sesuai format settlement"""
-    df = parse_all_logs()
-    filtered = df[df['filename'] == filename]
+    # Ambil MID/TID unik dari data yang difilter (seperti pintu_df)
+    pintu_df = bayar_df[['mid', 'tid']].drop_duplicates()
     
-    if filtered.empty: return "Not Found", 404
-
-    # Header: Count(3) + Amount(10)
-    header = f"{len(filtered):03d}{filtered['tarif'].sum():010d}"
-    
+    setel_df = pd.DataFrame(columns=['filename_source', 'tanggal', 'wktsetel', 'mid', 'tid', 'versi', 'bat', 'trxcount', 'trxamount'])
     wkt = datetime.now().strftime("%Y%m%d%H%M%S")
-    mid, tid = filtered.iloc[0]['mid'], filtered.iloc[0]['tid']
-    nama_output = f"{wkt}{mid}{tid}01001.txt"
-    
-    output = io.StringIO()
-    output.write(header + "\n")
-    for _, row in filtered.iterrows():
-        output.write(row['respon'][14:] + "\n") # Potong prefix
 
-    mem = io.BytesIO()
-    mem.write(output.getvalue().encode('utf-8'))
-    mem.seek(0)
-    
-    return send_file(mem, as_attachment=True, download_name=nama_output, mimetype='text/plain')
+    # Proses per pintu (MID/TID) sesuai logika Anda
+    for _, b in pintu_df.iterrows():
+        mid, tid = b['mid'], b['tid']
+        semua = bayar_df[(bayar_df['tid'] == tid) & (bayar_df['mid'] == mid)]
+        maxbat = (len(semua) // 999) + 1
+
+        for x in range(maxbat):
+            bat_num = x + 1
+            isibat = f"{bat_num:03d}"
+            
+            data_batch = semua.iloc[x*999 : (x+1)*999]
+            if not data_batch.empty:
+                trxamount = data_batch['tarif'].sum()
+                row_setel = {
+                    'filename_source': ", ".join(selected_filenames),
+                    'tanggal': datetime.now().date().isoformat(),
+                    'wktsetel': wkt,
+                    'mid': mid,
+                    'tid': tid,
+                    'versi': '01',
+                    'bat': isibat,
+                    'trxcount': len(data_batch),
+                    'trxamount': int(trxamount)
+                }
+                setel_df = pd.concat([setel_df, pd.DataFrame([row_setel])], ignore_index=True)
+                
+                # Simpan file fisik di /tmp/kirim
+                heder = f"{len(data_batch):03d}{int(trxamount):010d}"
+                nama_file = f"{wkt}{mid}{tid}01{isibat}.txt"
+                filepath = os.path.join(KIRIM_DIR, nama_file)
+                
+                with open(filepath, "w") as f:
+                    f.write(heder + "\n")
+                    for _, row_trx in data_batch.iterrows():
+                        f.write(row_trx['respon'][14:] + "\n")
+
+    return jsonify(setel_df.to_dict(orient='records'))
+
+@app.route('/api/download_ready')
+def download_ready():
+    """Download semua file yang baru saja dibuat di /tmp/kirim"""
+    files = [f for f in os.listdir(KIRIM_DIR)]
+    return jsonify(files)
+
+@app.route('/api/get_file/<name>')
+def get_file(name):
+    return send_file(os.path.join(KIRIM_DIR, name), as_attachment=True)
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
