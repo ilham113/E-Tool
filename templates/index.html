@@ -9,13 +9,13 @@
         body { background-color: #0f172a; color: #f8fafc; }
         .card { border: none; margin-bottom: 20px; }
         .card-header { background-color: #1e293b; color: #38bdf8; font-weight: bold; }
-        .table-container { background-color: #ffffff; color: #1e293b; padding: 15px; border-radius: 0 0 8px 8px; }
+        .table-container { background-color: #ffffff; color: #1e293b; padding: 15px; border-radius: 8px; }
     </style>
 </head>
 <body>
 <div class="container py-5">
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h3>💳 E-Money Tool (Settlement Engine)</h3>
+        <h3>💳 E-Money Tool</h3>
         <div>
             <input type="file" id="fileInput" class="d-none" multiple>
             <button class="btn btn-outline-info btn-sm me-2" onclick="$('#fileInput').click()">Upload Logs</button>
@@ -28,30 +28,31 @@
         <div class="card-body table-container">
             <table id="tableAll" class="table table-striped w-100">
                 <thead>
-                    <tr>
-                        <th>Date</th><th>Card Number</th><th>Amount</th><th>File Source</th>
-                    </tr>
+                    <tr><th>Date</th><th>Card Number</th><th>Amount</th><th>File Source</th></tr>
                 </thead>
             </table>
         </div>
     </div>
 
     <div class="card">
-        <div class="card-header">2. Select Logs for Settlement</div>
-        <div class="card-body table-container text-dark">
-            <select id="selectFiles" class="form-select mb-3" multiple style="height: 120px;"></select>
-            <button id="btnProcess" class="btn btn-primary w-100 fw-bold">⚙️ Jalankan Proses Settlement</button>
+        <div class="card-header">2. Filename Overview</div>
+        <div class="card-body table-container">
+            <table id="tableFiles" class="table table-hover w-100">
+                <thead>
+                    <tr><th style="width:40px">Select</th><th>Filename</th><th>Total Trx</th><th>Total Amount</th></tr>
+                </thead>
+                <tbody id="overviewBody"></tbody>
+            </table>
+            <button id="btnProcess" class="btn btn-primary w-100 mt-3 fw-bold">⚙️ Jalankan Proses Settlement</button>
         </div>
     </div>
 
     <div class="card border-info">
-        <div class="card-header">3. Hasil Settlement (Download Individual)</div>
+        <div class="card-header text-info">3. Settlement Result</div>
         <div class="card-body table-container">
-            <table id="tableSettlement" class="table table-bordered w-100 d-none text-dark">
+            <table id="tableSettlement" class="table table-bordered w-100 d-none">
                 <thead>
-                    <tr>
-                        <th>MID</th><th>TID</th><th>Batch</th><th>Count</th><th>Amount</th><th>Action</th>
-                    </tr>
+                    <tr><th>MID</th><th>TID</th><th>Batch</th><th>Count</th><th>Amount</th><th>Action</th></tr>
                 </thead>
             </table>
         </div>
@@ -66,17 +67,43 @@
     $(document).ready(function() {
         const tAll = $('#tableAll').DataTable();
         const tSet = $('#tableSettlement').DataTable({ paging: false });
+        const tFiles = $('#tableFiles').DataTable({ 
+            paging: false, searching: false, info: false,
+            columns: [{ orderable: false }, null, null, null]
+        });
+
+        function refresh() {
+            $.get('/api/init', function(data) {
+                // Update Tabel Transaksi
+                tAll.clear().rows.add(data.all.map(t => [t.trx_date, t.no_kartu, t.tarif, t.filename])).draw();
+
+                // Update Tabel Overview (FIX: Gunakan DataTable API)
+                tFiles.clear();
+                if (data.overview && data.overview.length > 0) {
+                    data.overview.forEach(f => {
+                        tFiles.row.add([
+                            `<input type="checkbox" class="file-chk" value="${f.filename}">`,
+                            f.filename,
+                            f.total_trx,
+                            `Rp ${f.total_amount.toLocaleString()}`
+                        ]);
+                    });
+                }
+                tFiles.draw();
+            });
+        }
+
         refresh();
 
         $('#btnProcess').on('click', function() {
-            const files = $('#selectFiles').val();
-            if(!files || files.length === 0) return alert('Pilih minimal satu file!');
-            
+            const selected = $('.file-chk:checked').map(function() { return this.value; }).get();
+            if(selected.length === 0) return alert('Pilih file!');
+
             $.ajax({
                 url: '/api/settlement/process',
                 type: 'POST',
                 contentType: 'application/json',
-                data: JSON.stringify({ filenames: files }),
+                data: JSON.stringify({ filenames: selected }),
                 success: function(res) {
                     $('#tableSettlement').removeClass('d-none');
                     tSet.clear().rows.add(res.map(s => [
@@ -88,30 +115,18 @@
         });
 
         $('#fileInput').on('change', function() {
-            let formData = new FormData();
-            for(let file of this.files) { formData.append('file', file); }
+            let fd = new FormData();
+            for(let f of this.files) { fd.append('file', f); }
             $.ajax({
-                url: '/api/upload', type: 'POST', data: formData, processData: false, contentType: false, 
-                success: () => { alert('Upload Selesai'); refresh(); }
+                url: '/api/upload', type: 'POST', data: fd, processData: false, contentType: false,
+                success: () => { alert('Upload Berhasil'); refresh(); }
             });
         });
 
         $('#btnClear').on('click', () => {
-            if(confirm('Hapus semua data?')) $.post('/api/clear-data', () => location.reload());
+            if(confirm('Hapus semua?')) $.post('/api/clear-data', () => location.reload());
         });
     });
-
-    function refresh() {
-        $.get('/api/init', (data) => {
-            const tAll = $('#tableAll').DataTable();
-            tAll.clear().rows.add(data.all.map(t => [t.trx_date, t.no_kartu, t.tarif, t.filename])).draw();
-            
-            $('#selectFiles').empty();
-            data.overview.forEach(f => {
-                $('#selectFiles').append(`<option value="${f.filename}">${f.filename} (${f.total_trx} trx - Rp ${f.total_amount.toLocaleString()})</option>`);
-            });
-        });
-    }
 </script>
 </body>
 </html>
