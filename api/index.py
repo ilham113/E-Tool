@@ -11,6 +11,9 @@ app = Flask(__name__, template_folder='../templates')
 DATA_DIR = '/tmp/data'
 KIRIM_DIR = '/tmp/kirim'
 
+# Maksimum transaksi per file (batch size)
+MAX_TRX_PER_FILE = 999
+
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(KIRIM_DIR, exist_ok=True)
 
@@ -78,14 +81,26 @@ def process_settlement():
     for _, b in pintu_df.iterrows():
         mid, tid = b['mid'], b['tid']
         semua = bayar_df[(bayar_df['tid'] == tid) & (bayar_df['mid'] == mid)]
-        maxbat = math.ceil(len(semua) / 999)
+        maxbat = math.ceil(len(semua) / MAX_TRX_PER_FILE)
 
         for x in range(maxbat):
             bat_num = f"{(x + 1):03d}"
-            data_batch = semua.iloc[x*999 : (x+1)*999]
+            start = x * MAX_TRX_PER_FILE
+            end = (x + 1) * MAX_TRX_PER_FILE
+            data_batch = semua.iloc[start:end]
             trxamount = data_batch['tarif'].sum()
             
-            nama_file = f"{wkt}{mid}{tid}01{bat_num}.txt"
+            # Bangun nama file tanpa ekstensi; format: <wkt><mid><tid>01<bat(3)> (harus 43 chars)
+            base_name = f"{wkt}{mid}{tid}01{bat_num}"
+
+            # Pastikan panjang nama file tanpa ekstensi tepat 43 karakter.
+            # Jika kurang => pad dengan '0' di kanan; jika lebih => potong ke 43.
+            if len(base_name) < 43:
+                base_name = base_name.ljust(43, '0')
+            elif len(base_name) > 43:
+                base_name = base_name[:43]
+
+            nama_file = base_name + ".txt"
             filepath = os.path.join(KIRIM_DIR, nama_file)
             
             with open(filepath, "w") as f:
